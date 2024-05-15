@@ -9,6 +9,9 @@
 
 ***
 
+> [!IMPORTANT]
+> AWS Console goes under regular maintenance. How this works may change in the future, in which case, this README will be updated.
+
 ## Intro
 
 AWS Lambda is a serverless computing service provided by AWS. It allows you to run code  without provisioning or managing servers. You simply upload your code, and Lambda automatically scales & manages the execution of your code. We will be wrapping our API server as a serverless function, and managing requests to our database using AWS Lambda.
