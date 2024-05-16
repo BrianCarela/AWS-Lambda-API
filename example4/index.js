@@ -1,6 +1,6 @@
 const express = require('express');
 const serverless = require('serverless-http');
-const mongoose = require('mongoose');
+const MongoClient = require('mongodb').MongoClient;
 const AWS = require('aws-sdk');
 const dotenv = require('dotenv');
 
@@ -10,55 +10,79 @@ dotenv.config();
 const app = express();
 const router = express.Router();
 
-// Movie schema and model
-const movieSchema = new mongoose.Schema({}, { strict: false });
-const Movie = mongoose.model('Movie', movieSchema, 'movies');
+// Define MongoDB connection string from environment variables
+const MONGODB_URI_TEMPLATE = process.env.MONGODB_URI;
 
-router.get('/', async (req, res) => {
+// Cached connection
+let cachedDb = null;
+
+// Checking logs
+console.log('lambda receiving signal')
+
+// Function to connect to MongoDB
+async function connectToDatabase() {
+  console.log('connecting to MongoDB...')
+
+  if (cachedDb) {
+    console.log('Using cached database connection');
+    return cachedDb;
+  }
+
+  console.log('Connecting to MongoDB');
+  const sts = new AWS.STS();
+  const assumedRole = await sts.assumeRole({
+    RoleArn: 'arn:aws:iam::552010969569:role/LambdaMongoDBAccessRole',
+    RoleSessionName: 'MongoDBAccessSession'
+  }).promise();
+
+  const { AccessKeyId, SecretAccessKey, SessionToken } = assumedRole.Credentials;
+
+  if (!MONGODB_URI_TEMPLATE) {
+    throw new Error('MONGODB_URI_TEMPLATE is not defined');
+  }
+
+  const uri = MONGODB_URI_TEMPLATE
+    .replace('<AWS_ACCESS_KEY_ID>', encodeURIComponent(AccessKeyId))
+    .replace('<AWS_SECRET_ACCESS_KEY>', encodeURIComponent(SecretAccessKey));
+
+  console.log('MongoDB URI:', uri);
+
+  const client = await MongoClient.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+  const db = client.db('sample_mflix');
+
+  cachedDb = db;
+  return db;
+}
+
+// Temporary route for testing
+router.get('/test', (req, res) => {
+  console.log('Test route is working')
+  res.json({ message: 'Test route is working' });
+});
+
+// Route to fetch movies
+router.get('/movies', async (req, res) => {
   try {
-    // Log environment variable to debug
-    console.log('MONGODB_URI:', process.env.MONGODB_URI);
+    console.log('Received request for /movies');
+    console.log('MONGODB_URI_TEMPLATE:', process.env.MONGODB_URI);
 
-    const sts = new AWS.STS();
-    const assumedRole = await sts.assumeRole({
-      RoleArn: 'arn:aws:iam::552010969569:role/LambdaMongoDBAccessRole',
-      RoleSessionName: 'MongoDBAccessSession'
-    }).promise();
+    const db = await connectToDatabase();
 
-    const { AccessKeyId, SecretAccessKey, SessionToken } = assumedRole.Credentials;
+    console.log('Connected to MongoDB');
 
-    // Check if the environment variable is defined
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined');
-    }
+    const movies = await db.collection('movies').find({}).limit(20).toArray();
+    console.log('Movies fetched:', movies);
 
-    // Replace placeholders in URI template with actual credentials
-    const uri = process.env.MONGODB_URI
-      .replace('<AWS_ACCESS_KEY_ID>', encodeURIComponent(AccessKeyId))
-      .replace('<AWS_SECRET_ACCESS_KEY>', encodeURIComponent(SecretAccessKey));
-
-    await mongoose.connect(uri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      auth: {
-        username: AccessKeyId,
-        password: SecretAccessKey
-      },
-      authMechanism: 'MONGODB-AWS'
-    });
-
-    const movies = await Movie.find({});
     res.json(movies);
-
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('Error in /movies route:', error.message, error);
     res.status(500).json({ error: error.message });
-  } finally {
-    mongoose.connection.close();
   }
 });
 
-app.use('/.netlify/functions/api', router);
-// app.use('/', router);
+// Use the base path
+app.use('/', router); // For root path testing
+app.use('/.netlify/functions/api', router); // For AWS Lambda Internal Testing
+
 
 module.exports.handler = serverless(app);
